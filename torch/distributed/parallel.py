@@ -14,8 +14,12 @@ else:
 
 
 def _thread_fn():
+    default_stream = torch.cuda.current_stream()
+
+    # TODO: use per-device streams -- this assumes they're all on a single one
     def _process_batch():
-        grad_batch, event = _reduction_queue.get()
+        grad_batch, event, cuda_event = _reduction_queue.get()
+        _reduction_stream.wait_event(cuda_event)
         coalesced = _flatten_tensors(grad_batch)
         coalesced *= (1. / get_num_processes())
         all_reduce(coalesced)
@@ -30,14 +34,14 @@ def _thread_fn():
 
 _reduction_queue = queue.Queue()
 _reduction_stream = torch.cuda.Stream()
-_reduction_thread = threading.Thread(target=_thread_fn)
+_reduction_thread = threading.Thread(target=_thread_fn, daemon=True)
 _reduction_thread.start()
 
 
 class DistributedDataParallel(nn.DataParallel):
     def __init__(self, *args, **kwargs):
         super(DistributedDataParallel, self).__init__(*args, **kwargs)
-        self.bucket_bytes_cap = 10 * 1024 * 1024  # 10 MB
+        self.bucket_bytes_cap = 1 * 1024 * 1024  # 1 MB
 
         self.bucket_sizes = []
         self.bucket_map = {}
@@ -67,6 +71,10 @@ class DistributedDataParallel(nn.DataParallel):
             grad_acc.register_hook(self._make_param_hook(p))
             self.grad_accs.append(grad_acc)
 
+    def forward(self, *args, **kwargs):
+        self.reduced = [False] * len(self.bucket_sizes)
+        return super(DistributedDataParallel, self).forward(*args, **kwargs)
+
     def _make_param_hook(self, param):
         bucket_idx = self.bucket_map[param]
         def dist_dp_hook(*unused):
@@ -93,13 +101,18 @@ class DistributedDataParallel(nn.DataParallel):
                 return
 
             event = threading.Event()
-            _reduction_queue.put((bucket, event))
+            cuda_event = torch.cuda.Event()
+            cuda_event.record()
+            _reduction_queue.put((bucket, event, cuda_event))
             Variable._execution_engine.queue_callback(lambda: event.wait())
             if bucket_idx == 0:
                 default_stream = torch.cuda.current_stream()
-                Variable._execution_engine.queue_callback(lambda: default_stream.wait_stream(_reduction_stream))
+                Variable._execution_engine.queue_callback(
+                    lambda: default_stream.wait_stream(_reduction_stream))
             self.buckets[bucket_idx] = []
             self.reduced[bucket_idx] = True
 
             # Try previous bucket
             bucket_idx -= 1
+
+

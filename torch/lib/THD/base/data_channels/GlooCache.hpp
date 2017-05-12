@@ -9,6 +9,7 @@
 #include "gloo/barrier_all_to_all.h"
 #include "gloo/broadcast_one_to_all.h"
 #ifdef WITH_CUDA
+#include "gloo/cuda_workspace.h"
 #include "gloo/cuda_allreduce_ring.h"
 #include "gloo/cuda_broadcast_one_to_all.h"
 #endif
