@@ -1,3 +1,4 @@
+import abc
 
 class Dataset(object):
     """An abstract class representing a Dataset.
@@ -6,10 +7,14 @@ class Dataset(object):
     ``__len__``, that provides the size of the dataset, and ``__getitem__``,
     supporting integer indexing in range from 0 to len(self) exclusive.
     """
-
+    
+    __metaclass__ = abc.ABCMeta
+    
+    @abc.abstractmethod
     def __getitem__(self, index):
         raise NotImplementedError
-
+        
+    @abc.abstractmethod
     def __len__(self):
         raise NotImplementedError
 
